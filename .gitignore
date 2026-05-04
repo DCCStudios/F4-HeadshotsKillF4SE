@@ -1,0 +1,22 @@
+# CMake / MSVC
+build/
+out/
+.vs/
+CMakeUserPresets.json
+*.vcxproj.user
+*.suo
+*.user
+
+# F4SE plugin build output (DLL lands here)
+Compile/
+
+# Game archives (reference / local only — not for GitHub)
+*.esp
+*.esm
+*.esl
+
+# OS / editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
