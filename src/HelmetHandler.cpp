@@ -2,25 +2,164 @@
 #include "GameDefinitions.h"
 #include "RE/Bethesda/SendHUDMessage.h"
 #include "RE/Bethesda/Script.h"
+#include "RE/Bethesda/TESBoundAnimObjects.h"
+#include "RE/NetImmerse/NiAVObject.h"
+
+#include <cmath>
 
 namespace HSK
 {
+	namespace
+	{
+		// Mirrors engine NEW_REFR_DATA (see CommonLibF4 fo4test headers). Used only for
+		// TESDataHandler::CreateReferenceAtLocation to spawn the point-light ref.
+		class NEW_REFR_DATA
+		{
+		public:
+			NEW_REFR_DATA()
+			{
+				// VTABLE::NEW_REFR_DATA[0] (CommonLibF4 VTABLE_IDs.h)
+				static const uintptr_t kVtable = REL::Relocation<uintptr_t>{ REL::ID(1139812) }.address();
+				*reinterpret_cast<std::uintptr_t*>(this) = kVtable;
+			}
+			virtual void HandlePre3D(RE::TESObjectREFR*) { return; }
+
+			RE::NiPoint3                       location{};
+			RE::NiPoint3                       direction{};
+			RE::TESBoundObject*                object{ nullptr };
+			RE::TESObjectCELL*                 interior{ nullptr };
+			RE::TESWorldSpace*                 world{ nullptr };
+			RE::TESObjectREFR*                 reference{ nullptr };
+			RE::BGSPrimitive*                  addPrimitive{ nullptr };
+			void*                              additionalData{ nullptr };
+			RE::BSTSmartPointer<RE::ExtraDataList> extra{ nullptr };
+			RE::INSTANCE_FILTER*               instanceFilter{ nullptr };
+			RE::BGSObjectInstanceExtra*         modExtra{ nullptr };
+			std::uint16_t                      maxLevel{ 0 };
+			bool                               forcePersist{ false };
+			bool                               clearStillLoadingFlag{ false };
+			bool                               initializeScripts{ true };
+			bool                               initiallyDisabled{ false };
+		};
+		static_assert(sizeof(NEW_REFR_DATA) == 0x70);
+
+		[[nodiscard]] RE::TESDataHandler* GetTESDataHandler()
+		{
+			if (IsNextGen()) {
+				static REL::Relocation<RE::TESDataHandler**> ptr{ REL::ID(2688883) };
+				return *ptr;
+			}
+			static REL::Relocation<RE::TESDataHandler**> ptr{ REL::ID(711558) };
+			return *ptr;
+		}
+
+		[[nodiscard]] RE::ObjectRefHandle CreateReferenceAtLocation(RE::TESDataHandler* a_dh, NEW_REFR_DATA& a_data)
+		{
+			using func_t = RE::ObjectRefHandle (*)(RE::TESDataHandler*, NEW_REFR_DATA&);
+			static REL::Relocation<func_t> func{ REL::ID(500304) };
+			return func(a_dh, a_data);
+		}
+
+		void ShowHelmetTrackerHUD(std::uint32_t a_refID)
+		{
+			auto* ref = RE::TESForm::GetFormByID<RE::TESObjectREFR>(a_refID);
+			if (!ref || ref->IsDeleted()) {
+				return;
+			}
+
+			auto* player = RE::PlayerCharacter::GetSingleton();
+			if (!player) return;
+
+			const auto& hp = player->data.location;
+			const auto& rp = ref->data.location;
+			const float dx = rp.x - hp.x;
+			const float dy = rp.y - hp.y;
+			const float dz = rp.z - hp.z;
+			const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+			const float distMeters = dist / 71.12f;
+
+			const float angle = std::atan2(dx, dy);
+			const float playerYaw = player->data.angle.z;
+			float relAngle = angle - playerYaw;
+			while (relAngle > 3.14159f) relAngle -= 6.28318f;
+			while (relAngle < -3.14159f) relAngle += 6.28318f;
+
+			const char* arrow = "<";
+			if (relAngle >= -0.3927f && relAngle < 0.3927f)
+				arrow = "^";
+			else if (relAngle >= 0.3927f && relAngle < 1.1781f)
+				arrow = ">";
+			else if (relAngle >= 1.1781f && relAngle < 1.9635f)
+				arrow = ">>";
+			else if (relAngle >= 1.9635f || relAngle < -1.9635f)
+				arrow = "v";
+			else if (relAngle >= -1.9635f && relAngle < -1.1781f)
+				arrow = "<<";
+
+			const char* vert = "";
+			if (dz > 100.0f) vert = " (above)";
+			else if (dz < -100.0f) vert = " (below)";
+
+			char msg[128];
+			snprintf(msg, sizeof(msg), "[%s] Helmet: %.0fm%s", arrow, distMeters, vert);
+			RE::SendHUDMessage::ShowHUDMessage(msg, nullptr, true, true);
+		}
+
+		// Fallback when CreateReferenceAtLocation fails (e.g. bad cell state).
+		void PlaceHelmetLightConsole(std::uint32_t a_helmetRefID, std::uint32_t a_lightFormID,
+			bool a_debugLog, const std::string& a_lightEdid)
+		{
+			F4SE::GetTaskInterface()->AddTask([helmetRefID = a_helmetRefID, a_lightFormID, a_debugLog, a_lightEdid]() {
+				auto* helmetRef = RE::TESForm::GetFormByID<RE::TESObjectREFR>(helmetRefID);
+				if (!helmetRef) return;
+
+				char cmd[64];
+				snprintf(cmd, sizeof(cmd), "PlaceAtMe %08X 1", a_lightFormID);
+
+				alignas(RE::Script) static std::byte scriptBuf[sizeof(RE::Script)]{};
+				static bool scriptInited = false;
+				if (!scriptInited) {
+					std::memset(scriptBuf, 0, sizeof(scriptBuf));
+					static const uintptr_t kVtable = REL::Relocation<uintptr_t>{ REL::ID(20936) }.address();
+					*reinterpret_cast<uintptr_t*>(scriptBuf) = kVtable;
+					scriptInited = true;
+				}
+				auto* script = reinterpret_cast<RE::Script*>(scriptBuf);
+				if (script->text) {
+					RE::free(script->text);
+					script->text = nullptr;
+				}
+				script->SetText(cmd);
+
+				try {
+					script->CompileAndRun(nullptr, RE::COMPILER_NAME::kDefault, helmetRef);
+				} catch (...) {
+					logger::warn("[HSK] Helmet light (console): CompileAndRun threw");
+					return;
+				}
+
+				if (a_debugLog) {
+					logger::info("[HSK] Helmet light (console): ran PlaceAtMe '{}' (0x{:08X}) on helmet 0x{:08X}",
+						a_lightEdid, a_lightFormID, helmetRefID);
+				}
+			});
+		}
+	}  // namespace
+
 	// =====================================================================
-	// ApplyEffectShader resolution (PostNG only -- ID 2205201)
+	// ApplyEffectShader — REL::ID(2205201) is Post-NG only (TESObjectREFRs.h).
+	// Pre-NG (1.10.163) has no entry for that ID; resolving it aborts the process
+	// (Relocation does not throw). Use the blink fallback on classic runtime.
 	// =====================================================================
 	void HelmetHandler::ResolveEngineFunctions()
 	{
-		if (!IsNextGen()) {
-			logger::info("[HSK] HelmetHandler: ApplyEffectShader skipped (PreNG -- ID not available)");
-			return;
-		}
-
-		try {
+		_applyShaderFn = nullptr;
+		if (IsNextGen()) {
 			_applyShaderFn = REL::Relocation<ApplyEffectShaderFn>{ REL::ID(2205201) }.get();
-			logger::info("[HSK] HelmetHandler: ApplyEffectShader resolved (PostNG)");
-		} catch (...) {
-			_applyShaderFn = nullptr;
-			logger::warn("[HSK] HelmetHandler: Failed to resolve ApplyEffectShader");
+			logger::info("[HSK] HelmetHandler: ApplyEffectShader resolved (Post-NG)");
+		} else {
+			logger::info("[HSK] HelmetHandler: ApplyEffectShader skipped on Pre-NG -- helmet highlight uses blink fallback");
 		}
 	}
 
@@ -31,7 +170,6 @@ namespace HSK
 		const auto* settings = Settings::GetSingleton();
 		if (!settings->helmetShaderEnabled) return;
 
-		// PreNG: ApplyEffectShader isn't available; use blink fallback.
 		if (!_applyShaderFn) {
 			ApplyHelmetBlink(a_ref);
 			return;
@@ -45,11 +183,17 @@ namespace HSK
 			return;
 		}
 
-		_applyShaderFn(a_ref, shader, settings->helmetShaderDuration, nullptr, false, false, nullptr, false);
+		// Engine uses positive durations; -1 (INI "indefinite") becomes a long hold.
+		float dur = settings->helmetShaderDuration;
+		if (dur < 0.0f) {
+			dur = 600.0f;
+		}
+
+		_applyShaderFn(a_ref, shader, dur, nullptr, false, false, nullptr, false);
 
 		if (settings->debugLogging) {
-			logger::info("[HSK] Applied shader '{}' to dropped helmet ref 0x{:08X} (duration: {}s)",
-				settings->helmetShaderEditorID, a_ref->GetFormID(), settings->helmetShaderDuration);
+			logger::info("[HSK] Applied shader '{}' to dropped helmet ref 0x{:08X} (duration: {:.0f}s)",
+				settings->helmetShaderEditorID, a_ref->GetFormID(), dur);
 		}
 	}
 
@@ -81,7 +225,8 @@ namespace HSK
 		}
 
 		std::thread([refID, totalSec]() {
-			constexpr int kBlinkMs = 400;
+			// Slower toggle than the old 400ms step -- full culled/invisible reads as harsh "blinking".
+			constexpr int kBlinkMs = 750;
 			const int    kTotalMs = static_cast<int>(totalSec * 1000.0f);
 			int elapsed = 0;
 			bool culled = false;
@@ -121,21 +266,15 @@ namespace HSK
 
 	// =====================================================================
 	// Helmet HUD tracker -- shows periodic compass direction + distance.
-	// Runs on a detached thread, stops when:
-	//   - Helmet is picked up (_playerDroppedRefID becomes 0)
-	//   - Ref is destroyed/deleted
-	//   - Maximum duration (shader duration) elapses
+	// Caller should post one immediate HUD ping on the game thread; this thread
+	// repeats after each interval. A new knockoff bumps _trackerSession so stale
+	// threads exit without blocking fresh trackers.
 	// =====================================================================
-	void HelmetHandler::StartHelmetTracker()
+	void HelmetHandler::StartHelmetTracker(std::uint32_t a_sessionId)
 	{
-		bool expected = false;
-		if (!_trackerRunning.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
-			return;  // already running
-		}
-
-		std::thread([this]() {
+		std::thread([this, a_sessionId]() {
 			const auto* settings = Settings::GetSingleton();
-			const float intervalSec = std::max(1.0f, settings->helmetTrackerIntervalSec);
+			const float intervalSec = std::max(0.5f, settings->helmetTrackerIntervalSec);
 			const float maxDuration = settings->helmetShaderDuration < 0.0f ? 600.0f : settings->helmetShaderDuration;
 			const int intervalMs = static_cast<int>(intervalSec * 1000.0f);
 			float elapsed = 0.0f;
@@ -144,71 +283,29 @@ namespace HSK
 				std::this_thread::sleep_for(std::chrono::milliseconds(intervalMs));
 				elapsed += intervalSec;
 
-				const std::uint32_t refID = _playerDroppedRefID.load(std::memory_order_acquire);
-				if (refID == 0) break;
+				if (_trackerSession.load(std::memory_order_acquire) != a_sessionId) {
+					return;
+				}
 
-				F4SE::GetTaskInterface()->AddTask([this, refID]() {
+				const std::uint32_t refID = _playerDroppedRefID.load(std::memory_order_acquire);
+				if (refID == 0) {
+					break;
+				}
+
+				F4SE::GetTaskInterface()->AddTask([refID]() {
 					auto* ref = RE::TESForm::GetFormByID<RE::TESObjectREFR>(refID);
 					if (!ref || ref->IsDeleted()) {
-						_playerDroppedRefID.store(0, std::memory_order_release);
 						return;
 					}
-
-					auto* player = RE::PlayerCharacter::GetSingleton();
-					if (!player) return;
-
-					const auto& hp = player->data.location;
-					const auto& rp = ref->data.location;
-					const float dx = rp.x - hp.x;
-					const float dy = rp.y - hp.y;
-					const float dz = rp.z - hp.z;
-					const float dist = std::sqrt(dx * dx + dy * dy + dz * dz);
-
-					// Convert to meters (1 Bethesda unit ≈ 1.4cm → /71.12 = meters)
-					const float distMeters = dist / 71.12f;
-
-					// Compass direction based on angle from player facing → helmet
-					const float angle = std::atan2(dx, dy);  // radians, 0=N, pi/2=E
-					// Player's facing direction (Z rotation in radians)
-					const float playerYaw = player->data.angle.z;
-					float relAngle = angle - playerYaw;
-					// Normalize to [-pi, pi]
-					while (relAngle > 3.14159f)  relAngle -= 6.28318f;
-					while (relAngle < -3.14159f) relAngle += 6.28318f;
-
-					// Pick a compass arrow based on relative angle
-					const char* arrow = nullptr;
-					if (relAngle >= -0.3927f && relAngle < 0.3927f)
-						arrow = "^";       // ahead
-					else if (relAngle >= 0.3927f && relAngle < 1.1781f)
-						arrow = ">";       // front-right
-					else if (relAngle >= 1.1781f && relAngle < 1.9635f)
-						arrow = ">>";      // right
-					else if (relAngle >= 1.9635f || relAngle < -1.9635f)
-						arrow = "v";       // behind
-					else if (relAngle >= -1.9635f && relAngle < -1.1781f)
-						arrow = "<<";      // left
-					else
-						arrow = "<";       // front-left
-
-					// Vertical hint
-					const char* vert = "";
-					if (dz > 100.0f) vert = " (above)";
-					else if (dz < -100.0f) vert = " (below)";
-
-					char msg[128];
-					snprintf(msg, sizeof(msg), "[%s] Helmet: %.0fm%s", arrow, distMeters, vert);
-					RE::SendHUDMessage::ShowHUDMessage(msg, nullptr, true, true);
+					ShowHelmetTrackerHUD(refID);
 				});
 			}
-
-			_trackerRunning.store(false, std::memory_order_release);
 		}).detach();
 	}
 
 	// =====================================================================
-	// Point light placement via console command PlaceAtMe.
-	// Uses Script::CompileAndRun to execute the command on the helmet ref.
+	// Point light: spawn LIGH ref via CreateReferenceAtLocation (reliable).
+	// Falls back to console PlaceAtMe + kDefault compiler if native spawn fails.
 	// =====================================================================
 	void HelmetHandler::PlaceHelmetLight(RE::TESObjectREFR* a_helmetRef)
 	{
@@ -217,60 +314,67 @@ namespace HSK
 		const auto* settings = Settings::GetSingleton();
 		if (!settings->helmetLightEnabled) return;
 
-		// Look up the light form by EditorID
-		auto* lightForm = RE::TESForm::GetFormByEditorID(settings->helmetLightEditorID);
-		if (!lightForm) {
+		auto* lightBase = RE::TESForm::GetFormByEditorID<RE::TESObjectLIGH>(settings->helmetLightEditorID);
+		if (!lightBase) {
 			logger::warn("[HSK] Helmet light: could not find TESObjectLIGH '{}'",
 				settings->helmetLightEditorID);
 			return;
 		}
 
-		const std::uint32_t lightFormID = lightForm->GetFormID();
-		const std::uint32_t helmetRefID = a_helmetRef->GetFormID();
+		auto* cell = a_helmetRef->GetParentCell();
+		if (!cell) {
+			logger::warn("[HSK] Helmet light: helmet ref has no parent cell");
+			return;
+		}
 
-		// Execute PlaceAtMe on the helmet ref using Script::CompileAndRun.
-		// The console command "PlaceAtMe <formID> 1" spawns a ref of the given
-		// form at the target ref's location.
+		auto* dh = GetTESDataHandler();
+		if (!dh) {
+			logger::warn("[HSK] Helmet light: TESDataHandler unavailable");
+			return;
+		}
+
+		NEW_REFR_DATA nd{};
+		nd.location.x = a_helmetRef->data.location.x;
+		nd.location.y = a_helmetRef->data.location.y;
+		nd.location.z = a_helmetRef->data.location.z;
+		nd.direction.x = 0.0f;
+		nd.direction.y = 0.0f;
+		nd.direction.z = 0.0f;
+		nd.object = static_cast<RE::TESBoundObject*>(static_cast<RE::TESForm*>(lightBase));
+		nd.reference = nullptr;
+		nd.forcePersist = false;
+		nd.initializeScripts = true;
+		nd.initiallyDisabled = false;
+
+		if (cell->IsInterior()) {
+			nd.interior = cell;
+			nd.world = nullptr;
+		} else {
+			nd.interior = nullptr;
+			nd.world = cell->worldSpace;
+		}
+
+		const std::uint32_t lightFormID = lightBase->GetFormID();
+		const std::uint32_t helmetRefID = a_helmetRef->GetFormID();
 		const bool debugLog = settings->debugLogging;
 		const std::string lightEdid = settings->helmetLightEditorID;
-		F4SE::GetTaskInterface()->AddTask([this, helmetRefID, lightFormID, debugLog, lightEdid]() {
-			auto* helmetRef = RE::TESForm::GetFormByID<RE::TESObjectREFR>(helmetRefID);
-			if (!helmetRef) return;
 
-			char cmd[64];
-			snprintf(cmd, sizeof(cmd), "PlaceAtMe %08X 1", lightFormID);
+		RE::ObjectRefHandle handle = CreateReferenceAtLocation(dh, nd);
+		if (handle) {
+			if (auto ptr = handle.get(); ptr) {
+				_playerHelmetLightRefID.store(ptr->GetFormID(), std::memory_order_release);
+				if (debugLog) {
+					logger::info("[HSK] Helmet light: spawned '{}' (0x{:08X}) at helmet 0x{:08X} (ref 0x{:08X})",
+						lightEdid, lightFormID, helmetRefID, ptr->GetFormID());
+				}
+				return;
+			}
+		}
 
-			// Use a static Script instance to avoid TESForm construction complexity.
-			// CompileAndRun is a non-virtual REL::Relocation call; it just needs
-			// the text field to be set correctly.
-			alignas(RE::Script) static std::byte scriptBuf[sizeof(RE::Script)]{};
-			static bool scriptInited = false;
-			if (!scriptInited) {
-				std::memset(scriptBuf, 0, sizeof(scriptBuf));
-				// Stamp the real Script vtable so Script::Init virtual dispatch works.
-				static const uintptr_t kVtable = REL::Relocation<uintptr_t>{ REL::ID(20936) }.address();
-				*reinterpret_cast<uintptr_t*>(scriptBuf) = kVtable;
-				scriptInited = true;
-			}
-			auto* script = reinterpret_cast<RE::Script*>(scriptBuf);
-			// Clear previous text before setting new command
-			if (script->text) {
-				RE::free(script->text);
-				script->text = nullptr;
-			}
-			script->SetText(cmd);
-
-			try {
-				script->CompileAndRun(nullptr, RE::COMPILER_NAME::kSystemWindow, helmetRef);
-			} catch (...) {
-				logger::warn("[HSK] Helmet light: CompileAndRun threw -- light placement failed");
-			}
-
-			if (debugLog) {
-				logger::info("[HSK] Helmet light: placed '{}' (0x{:08X}) at helmet ref 0x{:08X}",
-					lightEdid, lightFormID, helmetRefID);
-			}
-		});
+		if (debugLog) {
+			logger::warn("[HSK] Helmet light: CreateReferenceAtLocation failed; trying console PlaceAtMe");
+		}
+		PlaceHelmetLightConsole(helmetRefID, lightFormID, debugLog, lightEdid);
 	}
 
 	void HelmetHandler::CleanupHelmetLight()
@@ -625,25 +729,41 @@ namespace HSK
 				});
 			}
 
-			if (applyShader && droppedRef) {
-				ApplyHelmetShader(droppedRef);
-			}
-
 			// Record follower knockoff for post-combat restore.
 			if (recordForFollower && droppedRef) {
 				std::lock_guard lk(_followerMutex);
 				RecordFollowerKnockoff(actorID, helmetID, droppedRef->GetFormID());
 			}
 
-			// Start HUD tracker for the player's dropped helmet.
-			if (startTracker && droppedRef) {
-				_playerDroppedRefID.store(droppedRef->GetFormID(), std::memory_order_release);
-				StartHelmetTracker();
-			}
-
-			// Place a point light at the helmet for visibility in dark environments.
+			// Player highlight / tracker / point light: defer two task ticks so the dropped
+			// ref's Ni geometry exists (ApplyEffectShader on bare refs is unreliable same frame).
+			// Tracker uses a monotonic session so a new knockoff always replaces the old thread.
 			if (isPlayer && droppedRef) {
-				PlaceHelmetLight(droppedRef);
+				const std::uint32_t dropRefID = droppedRef->GetFormID();
+				const std::uint32_t trackerSession =
+					startTracker ? (_trackerSession.fetch_add(1, std::memory_order_acq_rel) + 1u) : 0u;
+
+				if (auto* iface = F4SE::GetTaskInterface()) {
+					iface->AddTask([this, dropRefID, applyShader, startTracker, trackerSession]() {
+						if (auto* iface2 = F4SE::GetTaskInterface()) {
+							iface2->AddTask([this, dropRefID, applyShader, startTracker, trackerSession]() {
+								auto* ref = RE::TESForm::GetFormByID<RE::TESObjectREFR>(dropRefID);
+								if (!ref || ref->IsDeleted()) {
+									return;
+								}
+								if (applyShader) {
+									ApplyHelmetShader(ref);
+								}
+								if (startTracker) {
+									_playerDroppedRefID.store(dropRefID, std::memory_order_release);
+									ShowHelmetTrackerHUD(dropRefID);
+									StartHelmetTracker(trackerSession);
+								}
+								PlaceHelmetLight(ref);
+							});
+						}
+					});
+				}
 			}
 
 			if (notifyPlayer) {

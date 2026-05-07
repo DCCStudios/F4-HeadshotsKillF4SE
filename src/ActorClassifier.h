@@ -39,6 +39,10 @@ namespace HSK
 		bool           isInPowerArmor{ false };
 		bool           isDeathclaw{ false };
 		bool           isMirelurkQueen{ false };
+		// Humanoid + race EditorID matched against Settings::feralGhoulRacePatterns
+		// (default substring "FeralGhoul" -> FeralGhoulRace, glowing variants, etc.).
+		// Instakill chance uses chances.feralGhoul / feral-caliber mods; helmet AR is ignored.
+		bool           isFeralGhoul{ false };
 		std::uint16_t  level{ 1 };
 		float          scale{ 1.0f };
 	};

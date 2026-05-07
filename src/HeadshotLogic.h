@@ -72,6 +72,7 @@ namespace HSK
 		//              vector = use horizontal aggressor->target fallback.
 		static void ScheduleKill(RE::Actor* a_target, RE::Actor* a_aggressor,
 			bool a_isPlayerOrFollower,
+			bool a_applyHeadSnap,
 			RE::NiPoint3 a_impactDir = { 0.0f, 0.0f, 0.0f });
 
 		static void ApplyKillImpulse(RE::Actor* a_target, RE::Actor* a_aggressor,

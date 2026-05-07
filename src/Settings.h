@@ -40,6 +40,7 @@ namespace HSK
 	struct ChanceSettings
 	{
 		float humanoid{ 100.0f };
+		float feralGhoul{ 100.0f };  // Humanoid races matched by feralGhoulRacePatterns; helmet ignored for chance
 		float smallCreature{ 100.0f };
 		float armoredCreature{ 60.0f };
 		float largeCreature{ 25.0f };
@@ -75,6 +76,13 @@ namespace HSK
 		float shotgunVsPA{ 0.0f };
 		float rifleVsPA{ 0.0f };             // can knock helmet off but cannot kill
 		float largeRifleVsPA{ 0.4f };
+
+		// Feral ghoul (and modded races matched by feralGhoulRacePatterns): default 1.0
+		// so pistol/shotgun/rifle/large rifle can all contribute (Excluded ammo stays 0).
+		float pistolVsFeralGhoul{ 1.0f };
+		float shotgunVsFeralGhoul{ 1.0f };
+		float rifleVsFeralGhoul{ 1.0f };
+		float largeRifleVsFeralGhoul{ 1.0f };
 	};
 
 	struct HelmetSettings
@@ -170,7 +178,7 @@ namespace HSK
 	struct KillImpulseSettings
 	{
 		bool  enabled{ true };
-		bool  applyOnAllHeadshots{ false }; // true = every headshot on non-player humanoids, false = instakill only
+		bool  applyOnAllHeadshots{ false }; // true = every headshot on non-player humanoids (incl. ferals), false = instakill only
 		float magnitude{ 25.0f };           // head snap angle in degrees
 		float upwardBias{ 0.3f };           // upward tilt added to rotation axis (head tilts back + up)
 		float decayDuration{ 1.5f };        // seconds to hold/decay the snap back to neutral
@@ -262,6 +270,9 @@ namespace HSK
 		// [Lists]
 		// Comma-separated race EditorIDs (or just plain text patterns) to exclude from this mod entirely.
 		std::vector<std::string> raceBlocklist{};
+		// Substrings of TESRace EditorID; if matched and final category is Humanoid, actor is
+		// treated as feral ghoul (separate base chance + caliber row; helmet ignored for instakill chance).
+		std::vector<std::string> feralGhoulRacePatterns{ "FeralGhoul" };
 		// Keywords that immediately exempt the actor (matched on RE::BGSKeyword EditorID).
 		std::vector<std::string> keywordImmuneList{ "ActorTypeRobot" };
 		// Per-race category overrides. Keyed by a case-insensitive substring

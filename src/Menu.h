@@ -45,6 +45,8 @@ namespace HSK::Menu
 
 		// Race blacklist input
 		inline char  raceBlacklistInput[256]{ "" };
+		// Feral ghoul race pattern list (comma-separated substrings of TESRace EditorID)
+		inline char  feralGhoulRacePatternsInput[256]{ "" };
 		// Keyword immune input
 		inline char  keywordImmuneInput[256]{ "" };
 

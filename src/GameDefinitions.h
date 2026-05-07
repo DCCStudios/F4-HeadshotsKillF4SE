@@ -258,21 +258,25 @@ namespace HSK
 	}
 
 	// =================================================================
-	// Event source resolution. Tries the modern function first
-	// (REL::ID(1411899)) then falls back to the legacy registration
-	// thunks (RegisterForHit at REL::ID(1240328)) for OG compatibility.
+	// Event source resolution (REL::Relocation does not throw on missing
+	// IDs — it fails fast — so we must pick IDs that exist per runtime).
+	//
+	// Post-NG: TESHitEvent::GetEventSource() thunk  -> REL::ID(1411899)
+	// Pre-NG:  HitEventSource global singleton ptr -> REL::ID(989868)
+	// Legacy RegisterForHit / UnregisterForHit thunks: 1240328 / 973940
 	// =================================================================
 
 	[[nodiscard]] inline RE::BSTEventSource<RE::TESHitEvent>* GetHitEventSource()
 	{
-		// Modern path: TESHitEvent::GetEventSource() returns the source.
-		try {
+		if (IsNextGen()) {
 			using func_t = RE::BSTEventSource<RE::TESHitEvent>* (*)();
 			REL::Relocation<func_t> func{ REL::ID(1411899) };
 			return func();
-		} catch (...) {
-			return nullptr;
 		}
+		// Pre-NG: HitEventSource* at fixed RVA (CommonLibF4PreNG Events.h).
+		struct HitEventSourceSingleton;
+		REL::Relocation<HitEventSourceSingleton*> singleton{ REL::ID(989868) };
+		return reinterpret_cast<RE::BSTEventSource<RE::TESHitEvent>*>(singleton.get());
 	}
 
 	// Returns true on successful registration via either path.
@@ -310,19 +314,20 @@ namespace HSK
 
 
 	// =================================================================
-	// TESMagicEffectApplyEvent registration (used to detect legendary
-	// mutation perks being applied so we can suppress the kill).
-	// REL::ID(1327824) per fo4test/PostNG.
+	// TESMagicEffectApplyEvent (legendary mutation detection).
+	// Post-NG: GetEventSource() thunk -> REL::ID(1327824)
+	// Pre-NG:  MGEFApplyEventSource*  -> REL::ID(1481228) (PreNG Events.h)
 	// =================================================================
 	[[nodiscard]] inline RE::BSTEventSource<RE::TESMagicEffectApplyEvent>* GetMagicEffectApplyEventSource()
 	{
-		try {
+		if (IsNextGen()) {
 			using func_t = RE::BSTEventSource<RE::TESMagicEffectApplyEvent>* (*)();
 			REL::Relocation<func_t> func{ REL::ID(1327824) };
 			return func();
-		} catch (...) {
-			return nullptr;
 		}
+		struct MGEFApplyEventSourceSingleton;
+		REL::Relocation<MGEFApplyEventSourceSingleton*> singleton{ REL::ID(1481228) };
+		return reinterpret_cast<RE::BSTEventSource<RE::TESMagicEffectApplyEvent>*>(singleton.get());
 	}
 
 	inline bool RegisterMagicEffectApplyEventSink(RE::BSTEventSink<RE::TESMagicEffectApplyEvent>* a_sink)

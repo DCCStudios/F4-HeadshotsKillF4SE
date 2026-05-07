@@ -86,8 +86,9 @@ namespace HSK
 	// Dropped world ref for the player's helmet (for HUD tracker + light)
 	std::atomic<std::uint32_t> _playerDroppedRefID{ 0 };
 	std::atomic<std::uint32_t> _playerHelmetLightRefID{ 0 };  // placed light ref (for cleanup)
-	std::atomic<bool> _trackerRunning{ false };
-	void StartHelmetTracker();
+	// Bumped on each new player tracker; in-flight threads exit when their session != current.
+	std::atomic<std::uint32_t> _trackerSession{ 0 };
+	void StartHelmetTracker(std::uint32_t a_sessionId);
 	void PlaceHelmetLight(RE::TESObjectREFR* a_helmetRef);
 	void CleanupHelmetLight();
 
@@ -112,8 +113,8 @@ namespace HSK
 		std::atomic<bool> _watcherRunning{ false };
 		void StartCombatEndWatcher();
 
-		// ApplyEffectShader function pointer (resolved at runtime, PostNG only)
-		using ApplyEffectShaderFn = void* (*)(RE::TESObjectREFR*, RE::TESEffectShader*, float, RE::TESObjectREFR*, bool, bool, void*, bool);
+		// TESObjectREFR::ApplyEffectShader (thiscall as free fn: explicit this in RCX)
+		using ApplyEffectShaderFn = void* (*)(RE::TESObjectREFR*, RE::TESEffectShader*, float, RE::TESObjectREFR*, bool, bool, RE::NiAVObject*, bool);
 		ApplyEffectShaderFn _applyShaderFn{ nullptr };
 
 		// Apply highlight shader to a dropped ref (PostNG)

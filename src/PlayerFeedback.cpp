@@ -302,17 +302,17 @@ namespace HSK
 		RefreshLayer(_greyscale,   pf.greyscale.imodEditorID,   "Greyscale");
 
 		struct LayerTask {
-			std::string editorID;
-			float       duration;
+			RE::TESImageSpaceModifier* imod = nullptr;
+			float                       duration = 0.0f;
 		};
 		std::vector<LayerTask> layers;
 
 		if (pf.concussion.enabled && _concussion.imod)
-			layers.push_back({ _concussion.editorID, pf.concussion.duration });
+			layers.push_back({ _concussion.imod, pf.concussion.duration });
 		if (pf.impactFlash.enabled && _impactFlash.imod)
-			layers.push_back({ _impactFlash.editorID, pf.impactFlash.duration });
+			layers.push_back({ _impactFlash.imod, pf.impactFlash.duration });
 		if (pf.greyscale.enabled && _greyscale.imod)
-			layers.push_back({ _greyscale.editorID, pf.greyscale.duration });
+			layers.push_back({ _greyscale.imod, pf.greyscale.duration });
 
 		if (layers.empty()) return;
 
@@ -326,8 +326,7 @@ namespace HSK
 		// permanent static hold that requires an abrupt Stop.
 		task->AddTask([layers, debugLog = s->debugLogging]() {
 			for (const auto& l : layers) {
-				auto* imod = RE::TESForm::GetFormByEditorID<RE::TESImageSpaceModifier>(
-					RE::BSFixedString(l.editorID.c_str()));
+				auto* imod = l.imod;
 				if (!imod) continue;
 
 				const bool origAnimatable = imod->data.animatable;
@@ -336,14 +335,15 @@ namespace HSK
 				imod->data.animatable = true;
 				imod->data.duration   = l.duration;
 
-				TriggerIMod(l.editorID.c_str());
+				const char* edid = imod->GetFormEditorID();
+				TriggerIMod(edid);
 
 				imod->data.animatable = origAnimatable;
 				imod->data.duration   = origDuration;
 
 				if (debugLog) {
 					logger::info("[HSK]   IMod triggered: '{}' dur={:.1f}s (was animatable={}, dur={:.1f}s)",
-						l.editorID, l.duration, origAnimatable, origDuration);
+						edid ? edid : "<no-edid>", l.duration, origAnimatable, origDuration);
 				}
 			}
 		});

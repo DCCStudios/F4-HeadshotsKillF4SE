@@ -116,6 +116,7 @@ namespace HSK
 
 		// [Chances]
 		chances.humanoid        = getF("Chances", "fHumanoid",        chances.humanoid);
+		chances.feralGhoul      = getF("Chances", "fFeralGhoul",      chances.feralGhoul);
 		chances.smallCreature   = getF("Chances", "fSmallCreature",   chances.smallCreature);
 		chances.armoredCreature = getF("Chances", "fArmoredCreature", chances.armoredCreature);
 		chances.largeCreature   = getF("Chances", "fLargeCreature",   chances.largeCreature);
@@ -141,6 +142,10 @@ namespace HSK
 		caliberMods.shotgunVsPA         = getF("CaliberModifiers", "fShotgunVsPA",         caliberMods.shotgunVsPA);
 		caliberMods.rifleVsPA           = getF("CaliberModifiers", "fRifleVsPA",           caliberMods.rifleVsPA);
 		caliberMods.largeRifleVsPA      = getF("CaliberModifiers", "fLargeRifleVsPA",      caliberMods.largeRifleVsPA);
+		caliberMods.pistolVsFeralGhoul     = getF("CaliberModifiers", "fPistolVsFeralGhoul",     caliberMods.pistolVsFeralGhoul);
+		caliberMods.shotgunVsFeralGhoul    = getF("CaliberModifiers", "fShotgunVsFeralGhoul",    caliberMods.shotgunVsFeralGhoul);
+		caliberMods.rifleVsFeralGhoul      = getF("CaliberModifiers", "fRifleVsFeralGhoul",      caliberMods.rifleVsFeralGhoul);
+		caliberMods.largeRifleVsFeralGhoul = getF("CaliberModifiers", "fLargeRifleVsFeralGhoul", caliberMods.largeRifleVsFeralGhoul);
 
 		// [Helmet]
 		helmet.enableHelmetKnockoff           = getB("Helmet", "bEnableHelmetKnockoff",          helmet.enableHelmetKnockoff);
@@ -237,6 +242,10 @@ namespace HSK
 		// [Lists]
 		raceBlocklist     = SplitCommaList(getS("Lists", "sRaceBlocklist", ""));
 		keywordImmuneList = SplitCommaList(getS("Lists", "sKeywordImmune", "ActorTypeRobot"));
+		feralGhoulRacePatterns = SplitCommaList(getS("Lists", "sFeralGhoulRacePatterns", "FeralGhoul"));
+		if (feralGhoulRacePatterns.empty()) {
+			feralGhoulRacePatterns.push_back("FeralGhoul");
+		}
 
 		// [RaceCategoryOverrides]
 		raceCategoryOverrides.clear();
@@ -313,6 +322,7 @@ namespace HSK
 
 		// [Chances]
 		setF("Chances", "fHumanoid",        chances.humanoid);
+		setF("Chances", "fFeralGhoul",      chances.feralGhoul);
 		setF("Chances", "fSmallCreature",   chances.smallCreature);
 		setF("Chances", "fArmoredCreature", chances.armoredCreature);
 		setF("Chances", "fLargeCreature",   chances.largeCreature);
@@ -338,6 +348,10 @@ namespace HSK
 		setF("CaliberModifiers", "fShotgunVsPA",         caliberMods.shotgunVsPA);
 		setF("CaliberModifiers", "fRifleVsPA",           caliberMods.rifleVsPA);
 		setF("CaliberModifiers", "fLargeRifleVsPA",      caliberMods.largeRifleVsPA);
+		setF("CaliberModifiers", "fPistolVsFeralGhoul",     caliberMods.pistolVsFeralGhoul);
+		setF("CaliberModifiers", "fShotgunVsFeralGhoul",    caliberMods.shotgunVsFeralGhoul);
+		setF("CaliberModifiers", "fRifleVsFeralGhoul",      caliberMods.rifleVsFeralGhoul);
+		setF("CaliberModifiers", "fLargeRifleVsFeralGhoul", caliberMods.largeRifleVsFeralGhoul);
 
 		// [Helmet]
 		setB("Helmet", "bEnableHelmetKnockoff",        helmet.enableHelmetKnockoff);
@@ -508,6 +522,10 @@ namespace HSK
 		setS("Lists", "sKeywordImmune",
 			JoinCommaList(keywordImmuneList).c_str(),
 			"; Comma-separated BGSKeyword EditorIDs that exempt the actor.");
+		setS("Lists", "sFeralGhoulRacePatterns",
+			JoinCommaList(feralGhoulRacePatterns).c_str(),
+			"; Comma-separated substrings of TESRace EditorID. Matched Humanoids use "
+			"fFeralGhoul base chance + f*VsFeralGhoul multipliers; helmet AR ignored for instakill chance.");
 
 		// [RaceCategoryOverrides]
 		ini.Delete("RaceCategoryOverrides", nullptr);

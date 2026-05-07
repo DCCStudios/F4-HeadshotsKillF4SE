@@ -149,10 +149,29 @@ namespace HSK
 		return s;
 	}
 
+	// If category is Humanoid and the race EditorID matches any feralGhoulRacePatterns
+	// substring, mark isFeralGhoul (separate instakill tuning; helmet ignored in chance).
+	static void ApplyFeralGhoulRaceTag(RE::Actor* a_actor, ActorInfo& io)
+	{
+		io.isFeralGhoul = false;
+		if (io.category != ActorCategory::Humanoid || !a_actor || !a_actor->race) {
+			return;
+		}
+		const char* raceEdid = a_actor->race->GetFormEditorID();
+		if (!raceEdid || !*raceEdid) return;
+		for (const auto& pat : Settings::GetSingleton()->feralGhoulRacePatterns) {
+			if (pat.empty()) continue;
+			if (ContainsCaseInsensitive(raceEdid, pat)) {
+				io.isFeralGhoul = true;
+				return;
+			}
+		}
+	}
+
 	ActorInfo ActorClassifier::Classify(RE::Actor* a_actor) const
 	{
 		ActorInfo info;
-		if (!a_actor) return info;
+		if (!a_actor) return {};
 
 		info.isPlayer = a_actor->IsPlayerRef();
 		info.isFollower = IsPlayerFollower(a_actor);
@@ -193,6 +212,7 @@ namespace HSK
 							if (lr.find("deathclaw") != std::string::npos) info.isDeathclaw = true;
 							if (lr.find("queen") != std::string::npos) info.isMirelurkQueen = true;
 						}
+						ApplyFeralGhoulRaceTag(a_actor, info);
 						return info;
 					}
 				}
@@ -213,53 +233,64 @@ namespace HSK
 		if (_keywords.actorTypeMirelurkQueen && a_actor->HasKeyword(_keywords.actorTypeMirelurkQueen, nullptr)) {
 			info.category = ActorCategory::LargeCreature;
 			info.isMirelurkQueen = true;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 		if (_keywords.actorTypeBehemoth && a_actor->HasKeyword(_keywords.actorTypeBehemoth, nullptr)) {
 			info.category = ActorCategory::LargeCreature;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 		if (_keywords.actorTypeDeathclaw && a_actor->HasKeyword(_keywords.actorTypeDeathclaw, nullptr)) {
 			info.category = ActorCategory::LargeCreature;
 			info.isDeathclaw = true;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 		if (_keywords.actorTypeFogCrawler && a_actor->HasKeyword(_keywords.actorTypeFogCrawler, nullptr)) {
 			info.category = ActorCategory::LargeCreature;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 		if (_keywords.actorTypeYaoGuai && a_actor->HasKeyword(_keywords.actorTypeYaoGuai, nullptr)) {
 			info.category = ActorCategory::LargeCreature;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 
 		// 1c. Super mutants
 		if (_keywords.actorTypeSuperMutant && a_actor->HasKeyword(_keywords.actorTypeSuperMutant, nullptr)) {
 			info.category = ActorCategory::SuperMutant;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 
 		// 1d. Armored creatures
 		if (_keywords.actorTypeMirelurk && a_actor->HasKeyword(_keywords.actorTypeMirelurk, nullptr)) {
 			info.category = ActorCategory::ArmoredCreature;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 		if (_keywords.actorTypeRadscorpion && a_actor->HasKeyword(_keywords.actorTypeRadscorpion, nullptr)) {
 			info.category = ActorCategory::ArmoredCreature;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 
 		// 1e. Standard humanoids
 		if (_keywords.actorTypeNPC && a_actor->HasKeyword(_keywords.actorTypeNPC, nullptr)) {
 			info.category = ActorCategory::Humanoid;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 		if (_keywords.actorTypeGhoul && a_actor->HasKeyword(_keywords.actorTypeGhoul, nullptr)) {
 			info.category = ActorCategory::Humanoid;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 		if (_keywords.actorTypeSynth && a_actor->HasKeyword(_keywords.actorTypeSynth, nullptr)) {
 			info.category = ActorCategory::Synth;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 
@@ -273,9 +304,11 @@ namespace HSK
 				"deathclaw", "fog crawler", "fogcrawler", "behemoth" })) {
 				info.category = ActorCategory::LargeCreature;
 				if (ContainsCaseInsensitive(search, "deathclaw")) info.isDeathclaw = true;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			info.category = ActorCategory::SmallCreature;
+			ApplyFeralGhoulRaceTag(a_actor, info);
 			return info;
 		}
 
@@ -291,52 +324,61 @@ namespace HSK
 			if (MatchesAnyPattern(search, { "deathclaw" })) {
 				info.category = ActorCategory::LargeCreature;
 				info.isDeathclaw = true;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			if (MatchesAnyPattern(search, { "queen" })) {
 				info.category = ActorCategory::LargeCreature;
 				info.isMirelurkQueen = true;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			if (MatchesAnyPattern(search, { "behemoth", "fog crawler", "fogcrawler",
 				"yao guai", "yaoguai", "bear", "gulper", "hermit crab",
 				"fog creeper", "anglerfish", "angler" })) {
 				info.category = ActorCategory::LargeCreature;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			// Super mutants
 			if (MatchesAnyPattern(search, { "super mutant", "supermutant", "nightkin" })) {
 				info.category = ActorCategory::SuperMutant;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			// Armored creatures
 			if (MatchesAnyPattern(search, { "mirelurk", "radscorpion", "rad scorpion",
 				"crab", "crawler" })) {
 				info.category = ActorCategory::ArmoredCreature;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			// Synths
 			if (MatchesAnyPattern(search, { "synthgen1", "synthgen2", "synth gen 1",
 				"synth gen 2", "synth courser" })) {
 				info.category = ActorCategory::Synth;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			// Robots
 			if (MatchesAnyPattern(search, { "robot", "turret", "sentry", "assaultron",
 				"protectron", "mr. handy", "mr. gutsy", "eyebot" })) {
 				info.category = ActorCategory::Robot;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 			// Humanoids
 			if (MatchesAnyPattern(search, { "human", "ghoul", "raider", "gunner",
 				"settler", "minutem" })) {
 				info.category = ActorCategory::Humanoid;
+				ApplyFeralGhoulRaceTag(a_actor, info);
 				return info;
 			}
 		}
 
 		// 3. Default for unknown modded creatures: SmallCreature
 		info.category = ActorCategory::SmallCreature;
+		ApplyFeralGhoulRaceTag(a_actor, info);
 		return info;
 	}
 }

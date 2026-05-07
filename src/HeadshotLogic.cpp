@@ -1,6 +1,8 @@
 #include "HeadshotLogic.h"
 #include "LegendaryTracker.h"
 
+#include <cmath>
+
 namespace HSK
 {
 	// =================================================================
@@ -86,13 +88,39 @@ namespace HSK
 		return dist(Rng()) < a_chancePercent;
 	}
 
+	// Kill-impulse / head snap: humanoids only (feral ghouls are Humanoid + isFeralGhoul).
+	// Synths and other categories use a different skeleton / rig and are excluded.
+	[[nodiscard]] static bool ShouldApplyHeadSnapImpulse(const ActorInfo& a_info) noexcept
+	{
+		return a_info.category == ActorCategory::Humanoid;
+	}
+
 	static bool IsRanged(const RE::HitData& a_hd, const RE::TESObjectWEAP* a_weap)
 	{
 		if (IsMelee(a_hd))      return false;
 		if (IsExplosion(a_hd))  return false;
+		// Gun bash: weapon is still kGun but the hit is melee motion, not a round.
+		// Bash often does NOT set kMelee, so it must be excluded explicitly.
+		if ((a_hd.flags & kHitFlag_Bash) != 0) return false;
 		if (!a_weap)            return false;
 		const auto type = a_weap->weaponData.type;
-		return type == RE::WEAPON_TYPE::kGun;
+		if (type != RE::WEAPON_TYPE::kGun) return false;
+		// Pistol whip / gun bash: engine often leaves weaponForm set but omits ammo
+		// (no cartridge). Real gunfire virtually always has HitData::ammo populated.
+		if (!a_hd.ammo) return false;
+		return true;
+	}
+
+	// When HitData is sparse (weaponForm + flags both zero), we infer headshots from
+	// aim for projectile-mod compatibility. The game also emits duplicate events with
+	// zero damage, zero impact, and no projectile — those must not use aim inference or
+	// they false-positive whenever the crosshair is on the head (e.g. after a bash).
+	static bool HasPlausibleImpactForAimFallback(const RE::TESHitEvent& a_event, const RE::HitData& a_hd)
+	{
+		if (GetTotalDamage(a_hd) > 0.001f) return true;
+		if (a_event.projectileFormID != 0) return true;
+		const auto& imp = a_hd.impactData;
+		return std::fabs(imp.hitPosX) + std::fabs(imp.hitPosY) + std::fabs(imp.hitPosZ) > 1.0f;
 	}
 
 	// When TESHitEvent::usesHitData is false (projectile-mod compatibility),
@@ -154,10 +182,11 @@ namespace HSK
 	void HeadshotLogic::EvaluateHit(const RE::TESHitEvent& a_event)
 	{
 		const RE::HitData& hd = a_event.hitData;
+		const auto*        settings = Settings::GetSingleton();
 
 		// 0. VERY EARLY log so we always know the sink fires.
 		//    This is gated on debugLogging; no pointer derefs that could crash.
-		if (Settings::GetSingleton()->debugLogging) {
+		if (settings->debugLogging) {
 			const std::uint32_t targetFID = a_event.target ? a_event.target->GetFormID() : 0u;
 			const std::uint32_t causeFID  = a_event.cause  ? a_event.cause->GetFormID()  : 0u;
 			logger::info("[HSK] SINK: target=0x{:08X} cause=0x{:08X} weaponForm={} ammo={} flags=0x{:X} srcFormID=0x{:08X} projFormID=0x{:08X}",
@@ -197,7 +226,7 @@ namespace HSK
 				weap = resolved.weapon;
 				ammo = resolved.ammo;
 			} catch (...) {
-				if (Settings::GetSingleton()->debugLogging) {
+				if (settings->debugLogging) {
 					logger::warn("[HSK] ResolveWeaponAmmoFallback threw; skipping hit");
 				}
 				return;
@@ -205,7 +234,7 @@ namespace HSK
 		}
 
 		// --- Debug: log every hit with limb, flags, weapon, ammo ---
-		if (Settings::GetSingleton()->debugLogging) {
+		if (settings->debugLogging) {
 			const std::uint32_t limb = hasHitData ? GetDamageLimb(hd) : 0xFFFFFFFFu;
 			const bool isHead = hasHitData ? IsHeadLimb(limb) : false;
 			const float totalDmg = hasHitData ? GetTotalDamage(hd) : 0.0f;
@@ -244,6 +273,9 @@ namespace HSK
 		if (hasHitData) {
 			if (!PassesGlobalFilters(a_event, actor, weap, ammo)) return;
 		} else {
+			// Sparse HitData (projectile-conversion etc.): still reject bash/melee
+			// if flags were written — same as IsRanged for gun-bash edge cases.
+			if ((hd.flags & (kHitFlag_Bash | kHitFlag_Melee)) != 0) return;
 			if (!weap || weap->weaponData.type != RE::WEAPON_TYPE::kGun) return;
 			if (!ammo) return;
 			if (ActorClassifier::GetSingleton()->IsRaceBlocklisted(actor)) return;
@@ -262,10 +294,8 @@ namespace HSK
 		// 5. Headshot detection
 		const bool isHeadshot = hasHitData
 			? IsHeadshot(hd, actor, actorInfo.category)
-			: DetectHeadshotFromAim(actor, aggressor);
+			: (HasPlausibleImpactForAimFallback(a_event, hd) && DetectHeadshotFromAim(actor, aggressor));
 		if (!isHeadshot) return;
-
-		const auto* settings = Settings::GetSingleton();
 
 		// 5a. Build the world-space impact direction (where the projectile was
 		//     MOVING when it hit). Priority:
@@ -297,7 +327,7 @@ namespace HSK
 		//     the death animation and bail -- no kill/chance/helmet logic.
 		if (alreadyDead) {
 			if (settings->killImpulse.enabled && !actorInfo.isPlayer &&
-				(actorInfo.category == ActorCategory::Humanoid || actorInfo.category == ActorCategory::Synth)) {
+				ShouldApplyHeadSnapImpulse(actorInfo)) {
 				ApplyKillImpulse(actor, aggressor, impactDir);
 			}
 			return;
@@ -340,8 +370,8 @@ namespace HSK
 		const char* weapEdid = weap ? weap->GetFormEditorID() : nullptr;
 
 		if (settings->debugLogging) {
-			logger::info("[HSK] HEADSHOT: actor=0x{:08X} cat={} caliber={} dmgType={} ammoDmg={:.1f} dist={:.0f} sneak={} crit={} vats={} legendary={} PA={} deathclaw={} queen={}",
-				actorID, ActorCategoryName(actorInfo.category),
+			logger::info("[HSK] HEADSHOT: actor=0x{:08X} cat={} feral={} caliber={} dmgType={} ammoDmg={:.1f} dist={:.0f} sneak={} crit={} vats={} legendary={} PA={} deathclaw={} queen={}",
+				actorID, ActorCategoryName(actorInfo.category), actorInfo.isFeralGhoul,
 				CaliberDisplay(ammoEntry.caliber),
 				ammoEntry.damageType == DamageType::Energy ? "Energy" : "Ballistic",
 				ammoEntry.ammoDamage, distance, isSneaking, isCritical, isInVATS,
@@ -381,10 +411,9 @@ namespace HSK
 				helmet.isPowerArmor);
 		}
 
-		// 7b. Head snap on all headshots (non-player humanoids only)
+		// 7b. Head snap on all headshots (non-player humanoids / feral ghouls only)
 		if (settings->killImpulse.enabled && settings->killImpulse.applyOnAllHeadshots &&
-			!killRolled && !actorInfo.isPlayer &&
-			(actorInfo.category == ActorCategory::Humanoid || actorInfo.category == ActorCategory::Synth)) {
+			!killRolled && !actorInfo.isPlayer && ShouldApplyHeadSnapImpulse(actorInfo)) {
 			ApplyKillImpulse(actor, aggressor, impactDir);
 		}
 
@@ -511,7 +540,8 @@ namespace HSK
 
 		// 10. Schedule kill
 		const bool isPlayerOrFollower = actorInfo.isPlayer || actorInfo.isFollower;
-		ScheduleKill(actor, aggressor, isPlayerOrFollower, impactDir);
+		ScheduleKill(actor, aggressor, isPlayerOrFollower,
+			ShouldApplyHeadSnapImpulse(actorInfo), impactDir);
 	}
 
 	// =================================================================
@@ -810,11 +840,20 @@ namespace HSK
 	{
 		const auto* s = Settings::GetSingleton();
 
+		// Feral ghoul (race pattern): instakill chance ignores head armor / PA buckets.
+		HelmetInfo helEff = a_helmetInfo;
+		if (a_actorInfo.isFeralGhoul) {
+			helEff.hasHeadArmor = false;
+			helEff.ballisticAR = 0.0f;
+			helEff.energyAR = 0.0f;
+			helEff.isPowerArmor = false;
+		}
+
 		// ---- I: Base chance by category, with deathclaw/queen overrides ----
 		float base = 0.0f;
 		switch (a_actorInfo.category) {
 		case ActorCategory::Humanoid:
-			base = s->chances.humanoid;
+			base = a_actorInfo.isFeralGhoul ? s->chances.feralGhoul : s->chances.humanoid;
 			break;
 		case ActorCategory::SuperMutant:
 			base = s->chances.superMutant;
@@ -843,64 +882,74 @@ namespace HSK
 
 		// ---- Caliber modifiers ----
 		float caliberMul = 1.0f;
-		const bool isSynthBucket =
-			a_actorInfo.category == ActorCategory::Synth && !a_helmetInfo.isPowerArmor;
-		const bool isLargeBucket =
-			(a_actorInfo.category == ActorCategory::LargeCreature ||
-			a_actorInfo.category == ActorCategory::SuperMutant) && !isSynthBucket;
-		const bool isArmoredBucket =
-			(a_actorInfo.category == ActorCategory::ArmoredCreature ||
-			((a_actorInfo.category == ActorCategory::Humanoid || a_actorInfo.category == ActorCategory::Synth)
-				&& a_helmetInfo.hasHeadArmor && !a_helmetInfo.isPowerArmor)) && !isSynthBucket;
-		const bool isPABucket = a_helmetInfo.isPowerArmor;
+		if (a_actorInfo.isFeralGhoul && a_actorInfo.category == ActorCategory::Humanoid) {
+			switch (a_ctx.caliber) {
+			case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsFeralGhoul; break;
+			case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsFeralGhoul; break;
+			case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsFeralGhoul; break;
+			case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsFeralGhoul; break;
+			default: /* Excluded */   caliberMul = 0.0f; break;
+			}
+		} else {
+			const bool isSynthBucket =
+				a_actorInfo.category == ActorCategory::Synth && !helEff.isPowerArmor;
+			const bool isLargeBucket =
+				(a_actorInfo.category == ActorCategory::LargeCreature ||
+				a_actorInfo.category == ActorCategory::SuperMutant) && !isSynthBucket;
+			const bool isArmoredBucket =
+				(a_actorInfo.category == ActorCategory::ArmoredCreature ||
+				((a_actorInfo.category == ActorCategory::Humanoid || a_actorInfo.category == ActorCategory::Synth)
+					&& helEff.hasHeadArmor && !helEff.isPowerArmor)) && !isSynthBucket;
+			const bool isPABucket = helEff.isPowerArmor;
 
-		if (isPABucket) {
-			switch (a_ctx.caliber) {
-			case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsPA; break;
-			case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsPA; break;
-			case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsPA; break;
-			case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsPA; break;
-			default: caliberMul = 0.0f; break;
-			}
-		} else if (isSynthBucket) {
-			switch (a_ctx.caliber) {
-			case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsSynth; break;
-			case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsSynth; break;
-			case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsSynth; break;
-			case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsSynth; break;
-			default: caliberMul = 0.0f; break;
-			}
-		} else if (isLargeBucket) {
-			switch (a_ctx.caliber) {
-			case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsLarge; break;
-			case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsLarge; break;
-			case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsLarge; break;
-			case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsLarge; break;
-			default: caliberMul = 0.0f; break;
-			}
-		} else if (isArmoredBucket) {
-			switch (a_ctx.caliber) {
-			case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsArmored; break;
-			case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsArmored; break;
-			case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsArmored; break;
-			case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsArmored; break;
-			default: caliberMul = 0.0f; break;
+			if (isPABucket) {
+				switch (a_ctx.caliber) {
+				case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsPA; break;
+				case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsPA; break;
+				case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsPA; break;
+				case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsPA; break;
+				default: caliberMul = 0.0f; break;
+				}
+			} else if (isSynthBucket) {
+				switch (a_ctx.caliber) {
+				case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsSynth; break;
+				case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsSynth; break;
+				case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsSynth; break;
+				case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsSynth; break;
+				default: caliberMul = 0.0f; break;
+				}
+			} else if (isLargeBucket) {
+				switch (a_ctx.caliber) {
+				case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsLarge; break;
+				case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsLarge; break;
+				case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsLarge; break;
+				case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsLarge; break;
+				default: caliberMul = 0.0f; break;
+				}
+			} else if (isArmoredBucket) {
+				switch (a_ctx.caliber) {
+				case Caliber::Pistol:     caliberMul = s->caliberMods.pistolVsArmored; break;
+				case Caliber::Shotgun:    caliberMul = s->caliberMods.shotgunVsArmored; break;
+				case Caliber::Rifle:      caliberMul = s->caliberMods.rifleVsArmored; break;
+				case Caliber::LargeRifle: caliberMul = s->caliberMods.largeRifleVsArmored; break;
+				default: caliberMul = 0.0f; break;
+				}
 			}
 		}
 
 		float chance = base * caliberMul;
 
 		// ---- A+C: Sigmoid armor scaling with separate ballistic/energy AR ----
-		if (a_helmetInfo.hasHeadArmor && !a_helmetInfo.isPowerArmor) {
+		if (helEff.hasHeadArmor && !helEff.isPowerArmor) {
 			float effectiveAR = 0.0f;
 			float halfAR = 0.0f;
 
 			if (a_ctx.dmgType == DamageType::Energy) {
-				effectiveAR = a_helmetInfo.energyAR +
-					a_helmetInfo.ballisticAR * s->armorScaling.crossResistFactor;
+				effectiveAR = helEff.energyAR +
+					helEff.ballisticAR * s->armorScaling.crossResistFactor;
 				halfAR = s->armorScaling.energyHalfAR;
 			} else {
-				effectiveAR = a_helmetInfo.ballisticAR;
+				effectiveAR = helEff.ballisticAR;
 				halfAR = s->armorScaling.ballisticHalfAR;
 			}
 
@@ -1002,7 +1051,11 @@ namespace HSK
 	// Kill impulse: insert a fake joint above the head/neck and rotate
 	// it to create a head snap-back. The animation system doesn't know
 	// about the inserted node, so the rotation persists and layers on
-	// top of death animations. A background thread decays it to zero.
+	// top of death animations. A background thread only sleeps between
+	// steps; each rotation write runs on the game thread and must
+	// re-resolve the NiNode by actor FormID — holding NiPointer across
+	// death/ragdoll/despawn can leave dangling nodes that crash Ni
+	// updates while walking near corpses (Buffout AV on HSK_HeadImpulse).
 	// =================================================================
 	static constexpr const char* kHeadImpulseBoneName = "HSK_HeadImpulse";
 
@@ -1052,6 +1105,16 @@ namespace HSK
 		inserted->AttachChild(a_headBone, true);
 
 		return inserted;
+	}
+
+	static RE::NiNode* FindHeadImpulseNode(RE::Actor* a_actor)
+	{
+		if (!a_actor) return nullptr;
+		auto* obj3D = a_actor->Get3D();
+		if (!obj3D) return nullptr;
+		const RE::BSFixedString name{ kHeadImpulseBoneName };
+		auto* obj = obj3D->GetObjectByName(name);
+		return obj ? obj->IsNode() : nullptr;
 	}
 
 	void HeadshotLogic::ApplyKillImpulse(RE::Actor* a_target, RE::Actor* a_aggressor,
@@ -1171,16 +1234,18 @@ namespace HSK
 
 		// Decay the rotation back to identity over the configured duration.
 		// Each step posts to the main thread to safely modify the node.
-		// We hold the node via NiPointer so it can't be freed under us if
-		// the actor's 3D unloads mid-decay; and we tag every step with the
-		// generation we captured, so superseded decays no-op.
+		// Do NOT capture NiPointer<NiNode>: after kill the skeleton can be
+		// torn down or rebuilt while decay timers still fire; a stale node
+		// pointer crashes the Ni scene graph (RCX=0 / AV under Buffout4
+		// while iterating past HSK_HeadImpulse). Re-resolve by actor FormID
+		// and bone name each tick; skip if the actor or bone is gone.
 		const float decayDuration = settings->killImpulse.decayDuration;
 		const int   steps = std::max(5, static_cast<int>(decayDuration * 20.0f)); // ~20 steps/sec
 		const float stepDelay = decayDuration / static_cast<float>(steps);
 
-		RE::NiPointer<RE::NiNode> nodePtr(impulseNode);
+		const std::uint32_t actorID = a_target->GetFormID();
 
-		std::thread([nodePtr, rotAxis, angleRad, steps, stepDelay, myGen]() {
+		std::thread([actorID, rotAxis, angleRad, steps, stepDelay, myGen]() {
 			for (int i = 1; i <= steps; ++i) {
 				std::this_thread::sleep_for(
 					std::chrono::milliseconds(static_cast<int>(stepDelay * 1000.0f)));
@@ -1189,10 +1254,11 @@ namespace HSK
 				const float curAngle = angleRad * (1.0f - t);
 				const int curStep = i;
 
-				F4SE::GetTaskInterface()->AddTask([nodePtr, rotAxis, curAngle, curStep, steps, myGen]() {
-					auto* node = nodePtr.get();
+				F4SE::GetTaskInterface()->AddTask([actorID, rotAxis, curAngle, curStep, steps, myGen]() {
+					auto* actor = RE::TESForm::GetFormByID<RE::Actor>(actorID);
+					if (!actor) return;
+					auto* node = FindHeadImpulseNode(actor);
 					if (!node) return;
-					// Superseded by a newer impulse on this same node? Bail.
 					if (node->userData != myGen) return;
 					if (curStep >= steps) {
 						node->local.rotate.MakeIdentity();
@@ -1208,7 +1274,7 @@ namespace HSK
 	// Kill scheduling
 	// =================================================================
 	void HeadshotLogic::ScheduleKill(RE::Actor* a_target, RE::Actor* a_aggressor,
-		bool a_isPlayerOrFollower, RE::NiPoint3 a_impactDir)
+		bool a_isPlayerOrFollower, bool a_applyHeadSnap, RE::NiPoint3 a_impactDir)
 	{
 		if (!a_target) return;
 		auto* task = F4SE::GetTaskInterface();
@@ -1229,8 +1295,9 @@ namespace HSK
 		}
 
 		const bool isPlayerOrFollower = a_isPlayerOrFollower;
+		const bool applyHeadSnap      = a_applyHeadSnap;
 		const RE::NiPoint3 impactDir  = a_impactDir;
-		task->AddTask([targetID, aggressorID, isPlayerOrFollower, twoShotKill, impactDir]() {
+		task->AddTask([targetID, aggressorID, isPlayerOrFollower, twoShotKill, applyHeadSnap, impactDir]() {
 			auto* target = RE::TESForm::GetFormByID<RE::Actor>(targetID);
 			if (!target || target->IsDead(true)) return;
 
@@ -1274,7 +1341,9 @@ namespace HSK
 				// Modifying a still-living, stable skeleton then killing them
 				// makes the engine bring the death animation up *with* our
 				// rotation already in the parent chain.
-				ApplyKillImpulse(target, aggressor, impactDir);
+				if (applyHeadSnap) {
+					ApplyKillImpulse(target, aggressor, impactDir);
+				}
 				spell->ApplyKillDamage(target, aggressor);
 			}
 		});

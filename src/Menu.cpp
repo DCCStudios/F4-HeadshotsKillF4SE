@@ -63,6 +63,9 @@ namespace HSK::Menu
 		const std::string r = JoinCommaList(s.raceBlocklist);
 		std::strncpy(State::raceBlacklistInput, r.c_str(), sizeof(State::raceBlacklistInput) - 1);
 		State::raceBlacklistInput[sizeof(State::raceBlacklistInput) - 1] = '\0';
+		const std::string fg = JoinCommaList(s.feralGhoulRacePatterns);
+		std::strncpy(State::feralGhoulRacePatternsInput, fg.c_str(), sizeof(State::feralGhoulRacePatternsInput) - 1);
+		State::feralGhoulRacePatternsInput[sizeof(State::feralGhoulRacePatternsInput) - 1] = '\0';
 		const std::string k = JoinCommaList(s.keywordImmuneList);
 		std::strncpy(State::keywordImmuneInput, k.c_str(), sizeof(State::keywordImmuneInput) - 1);
 		State::keywordImmuneInput[sizeof(State::keywordImmuneInput) - 1] = '\0';
@@ -195,7 +198,6 @@ namespace HSK::Menu
 	void __stdcall RenderHelmet();
 	void __stdcall RenderAmmoBrowser();
 	void __stdcall RenderRaceBlacklist();
-	void __stdcall RenderMelee();
 	void __stdcall RenderKillImpulse();
 	void __stdcall RenderLegendary();
 	void __stdcall RenderPlayerFeedback();
@@ -220,10 +222,9 @@ namespace HSK::Menu
 		F4SEMenuFramework::AddSectionItem("Chances",        RenderChances);
 		F4SEMenuFramework::AddSectionItem("Caliber Mods",   RenderCaliberMods);
 		F4SEMenuFramework::AddSectionItem("Caliber Rules",  RenderCaliberRules);
-		F4SEMenuFramework::AddSectionItem("Helmet",         RenderHelmet);
+		F4SEMenuFramework::AddSectionItem("Helmets",        RenderHelmet);
 		F4SEMenuFramework::AddSectionItem("Ammo Browser",   RenderAmmoBrowser);
 		F4SEMenuFramework::AddSectionItem("Race Blacklist", RenderRaceBlacklist);
-		F4SEMenuFramework::AddSectionItem("Melee",             RenderMelee);
 		F4SEMenuFramework::AddSectionItem("Kill Impulse",     RenderKillImpulse);
 		F4SEMenuFramework::AddSectionItem("Legendary",        RenderLegendary);
 		F4SEMenuFramework::AddSectionItem("Player Feedback", RenderPlayerFeedback);
@@ -234,6 +235,9 @@ namespace HSK::Menu
 		const auto& s = *Settings::GetSingleton();
 		std::string joinedRaces = JoinCommaList(s.raceBlocklist);
 		std::strncpy(State::raceBlacklistInput, joinedRaces.c_str(), sizeof(State::raceBlacklistInput) - 1);
+		std::string joinedFeral = JoinCommaList(s.feralGhoulRacePatterns);
+		std::strncpy(State::feralGhoulRacePatternsInput, joinedFeral.c_str(), sizeof(State::feralGhoulRacePatternsInput) - 1);
+		State::feralGhoulRacePatternsInput[sizeof(State::feralGhoulRacePatternsInput) - 1] = '\0';
 		std::string joinedKWs = JoinCommaList(s.keywordImmuneList);
 		std::strncpy(State::keywordImmuneInput, joinedKWs.c_str(), sizeof(State::keywordImmuneInput) - 1);
 
@@ -378,7 +382,7 @@ namespace HSK::Menu
 		PageHeader("Instakill chances",
 			"Per-target-category base chance (in %) that a confirmed headshot triggers "
 			"the instant-kill damage application. The chance is then modulated by caliber "
-			"vs. armor (see the 'Caliber Mods' page) and by helmet AR (see 'Helmet'). "
+			"vs. armor (see the 'Caliber Mods' page) and by helmet AR (see 'Helmets'). "
 			"Set to 100 to always instakill, set to 0 to disable a category entirely.");
 
 		SectionHeader("Per-category instakill chance (base %)",
@@ -387,6 +391,12 @@ namespace HSK::Menu
 			"Humans, ghouls, and other bipedal humanoid enemies (Raiders, Gunners, BoS, "
 			"etc.). Default 100 means a head hit with any qualifying caliber kills outright "
 			"unless armor downgrades it. Gen-3 Synths have their own category below.");
+		SliderFloatSave("Feral ghoul (race patterns)", &s->chances.feralGhoul, 0.0f, 100.0f,
+			"Humanoids whose TESRace EditorID matches a substring from the Feral ghoul race "
+			"patterns field (same menu page as the race blacklist). Default pattern 'FeralGhoul' "
+			"matches FeralGhoulRace, glowing variants, etc. Instakill uses this base chance instead "
+			"of Humanoid, ignores helmet AR on the roll, and uses the Feral ghoul caliber row "
+			"(Caliber Mods; defaults 1.0 for pistol through large rifle).");
 		SliderFloatSave("Small creature",   &s->chances.smallCreature,   0.0f, 100.0f,
 			"Bloatflies, Bloodbugs, Stingwings, Molerats, dogs, Yao Guai, Vicious Dogs, etc. "
 			"Most are 100 by default since head hits should easily one-shot them.");
@@ -470,6 +480,22 @@ namespace HSK::Menu
 			"these go right through; the headgear barely matters.");
 
 		ImGuiMCP::Spacing();
+		SectionHeader("Caliber multiplier vs Feral ghoul (race pattern match)",
+			"Only applies when the actor is classified as Humanoid AND the race EditorID "
+			"matches a feral ghoul pattern (default substring FeralGhoul). Helmet AR does not "
+			"reduce instakill chance for these targets; these multipliers replace the normal "
+			"armored / PA buckets. Default 1.0 for all four tiers = any pistol/rifle caliber "
+			"can contribute at full weight (Excluded ammo types stay at 0).");
+		SliderFloatSave("Pistol##FG",      &s->caliberMods.pistolVsFeralGhoul,     0.0f, 2.0f,
+			"Pistol-caliber vs. feral ghoul race match.");
+		SliderFloatSave("Shotgun##FG",     &s->caliberMods.shotgunVsFeralGhoul,    0.0f, 2.0f,
+			"Shotgun vs. feral ghoul race match.");
+		SliderFloatSave("Rifle##FG",       &s->caliberMods.rifleVsFeralGhoul,      0.0f, 2.0f,
+			"Standard rifle round vs. feral ghoul race match.");
+		SliderFloatSave("Large rifle##FG", &s->caliberMods.largeRifleVsFeralGhoul, 0.0f, 2.0f,
+			"Large / anti-materiel rifle vs. feral ghoul race match.");
+
+		ImGuiMCP::Spacing();
 		SectionHeader("Caliber multiplier vs Large / SuperMutant",
 			"Applied when the target is a Super Mutant, Behemoth, Deathclaw, Bear, "
 			"Mirelurk Queen, etc. Default lets only rifles through at meaningful chance.");
@@ -546,6 +572,9 @@ namespace HSK::Menu
 			{ "Humanoid (helmet)",    s->chances.humanoid,
 				s->caliberMods.pistolVsArmored, s->caliberMods.shotgunVsArmored,
 				s->caliberMods.rifleVsArmored,  s->caliberMods.largeRifleVsArmored },
+			{ "Feral ghoul (pattern)", s->chances.feralGhoul,
+				s->caliberMods.pistolVsFeralGhoul, s->caliberMods.shotgunVsFeralGhoul,
+				s->caliberMods.rifleVsFeralGhoul,  s->caliberMods.largeRifleVsFeralGhoul },
 			{ "Synth (all gens)",     s->chances.synth,
 				s->caliberMods.pistolVsSynth, s->caliberMods.shotgunVsSynth,
 				s->caliberMods.rifleVsSynth,  s->caliberMods.largeRifleVsSynth },
@@ -617,23 +646,25 @@ namespace HSK::Menu
 	{
 		auto* s = Settings::GetSingleton();
 
-		PageHeader("Helmet knockoff",
-			"When a headshot fails to instakill a humanoid because the helmet stopped "
-			"the round, the mod can instead unequip the helmet (and drop it on the floor) "
-			"so a follow-up shot is now an unarmored headshot. This page tunes those "
-			"chances and the physics of the dropped helmet.");
+		PageHeader("Helmets",
+			"Helmet knockoff from gunshots, melee, and gun bash; drop physics; protection "
+			"for you and followers; and options to spot a helmet after it hits the ground.");
 
-		SectionHeader("Helmet knockoff settings");
-		CheckboxSave("Enable helmet knockoff", &s->helmet.enableHelmetKnockoff,
-			"Master switch. If OFF, helmets stay on no matter how many times you shoot the "
-			"target in the head. The instakill chance check still happens normally.");
+		SectionHeader("Gunshot knockoff",
+			"When a bullet headshot fails to instakill because the helmet stopped the round, "
+			"the mod can unequip the helmet so a follow-up shot hits bare skin. "
+			"Shotgun uses a pellet merge window (see Drop physics).");
+		CheckboxSave("Enable gunshot helmet knockoff", &s->helmet.enableHelmetKnockoff,
+			"Master switch for ranged knockoff. If OFF, gun headshots never strip helmets.\n"
+			"This toggle is also required for melee / gun-bash knockoff (see below).\n"
+			"Instakill chance is still evaluated separately when a round connects.");
 
 		SliderFloatSave("Knockoff chance -- pistol",       &s->helmet.knockoffChancePistol,    0.0f, 100.0f,
 			"Chance per pistol-caliber head hit that the helmet pops off. Pistols are the "
 			"only way to depart a Combat Helmet without a rifle by default.");
 		SliderFloatSave("Knockoff chance -- shotgun",      &s->helmet.knockoffChanceShotgun,   0.0f, 100.0f,
 			"Chance per shotgun blast (not per pellet -- pellets within the group window "
-			"below count as one blast).");
+			"under Drop physics count as one blast).");
 		SliderFloatSave("Knockoff chance -- rifle",        &s->helmet.knockoffChanceRifle,     0.0f, 100.0f,
 			"Chance per rifle/large-rifle head hit on a regular helmet. Usually high since "
 			"rifles deliver enough impulse to defeat the strap.");
@@ -644,8 +675,34 @@ namespace HSK::Menu
 			"Chance per anti-materiel head hit on a Power Armor helmet. Higher than a "
 			"normal rifle because the round actually carries enough energy to peel it.");
 
-		ImGuiMCP::Spacing();
-		SectionHeader("Drop physics");
+		SectionHeader("Melee & gun bash knockoff",
+			"Melee head hits and firearm bashes can knock helmets off. These never instakill "
+			"through this mod. PA helmets are immune (bolted to the frame). "
+			"Player knockoff multiplier and master toggles in Player helmet apply here too.");
+		ImGuiMCP::TextWrapped(
+			"Melee and bash require \"Enable gunshot helmet knockoff\" (above) to be ON "
+			"— the plugin uses that as the shared master gate.");
+		CheckboxSave("Enable melee / bash knockoff", &s->melee.enableMeleeKnockoff,
+			"If ON, melee head hits and qualifying gun bashes can knock off helmets using "
+			"the chances below.\n"
+			"If OFF, the mod ignores melee and bash for knockoff.");
+		SliderFloatSave("Melee -- medium weapon (%)", &s->melee.meleeKnockoffChanceMedium, 0.0f, 100.0f,
+			"Per head hit: one-handed melee (machete, combat knife, pipe wrench, 1H bat, etc.). "
+			"Default 10%: lighter swings.",
+			"%.0f");
+		SliderFloatSave("Melee -- large weapon (%)", &s->melee.meleeKnockoffChanceLarge, 0.0f, 100.0f,
+			"Per head hit: two-handed melee (super sledge, 2H bat, sledgehammer, Grognak's Axe, etc.). "
+			"Default 20%: heavier swings.",
+			"%.0f");
+		CheckboxSave("Gun bash can knock off helmets", &s->melee.gunBashKnockoff,
+			"If ON, bashing with a non-pistol firearm counts for knockoff. Pistol-caliber "
+			"weapons and excluded ammo types are filtered out.");
+		SliderFloatSave("Gun bash knockoff (%)", &s->melee.gunBashKnockoffChance, 0.0f, 100.0f,
+			"Per qualifying gun-bash head hit. Default 15%: between medium and large melee.",
+			"%.0f");
+
+		SectionHeader("Drop physics",
+			"How the helmet object moves when it detaches, plus shotgun pellet grouping.");
 		SliderFloatSave("Drop spawn height",    &s->helmet.dropSpawnHeight,    0.0f, 80.0f,
 			"Height above the head node (in game units) where the helmet reference spawns. "
 			"A small offset clears the skull geometry so the Havok impulse doesn't clip. "
@@ -698,11 +755,11 @@ namespace HSK::Menu
 			"%.0f");
 		CheckboxSave("Player helmet can be knocked off", &s->playerHelmetKnockoffEnabled,
 			"Master toggle for player helmet knockoff. If OFF, the player is completely "
-			"immune to helmet knockoff regardless of the caliber chance settings above. "
-			"Use this if you want NPCs to lose helmets but you to keep yours.");
+			"immune to knockoff from gunshots, melee, and bash regardless of the chance "
+			"sliders. Use this if you want NPCs to lose helmets but you to keep yours.");
 		SliderFloatSave("Player knockoff chance multiplier", &s->playerHelmetKnockoffMult, 0.0f, 3.0f,
-			"Multiplier applied to the caliber-based knockoff chance when the player is the "
-			"target. Examples:\n"
+			"Multiplier applied to knockoff chance when the player is the target "
+			"(gunshot caliber chances and melee / bash chances). Examples:\n"
 			"  1.0 = same chance as NPCs (default)\n"
 			"  0.5 = half the chance\n"
 			"  2.0 = double the chance\n"
@@ -731,13 +788,14 @@ namespace HSK::Menu
 			"unload / long distance), the helmet is lost -- we do NOT create a duplicate.");
 
 		ImGuiMCP::Spacing();
-		SectionHeader("Helmet highlight",
+		SectionHeader("Dropped helmet -- highlight",
 			"Make your dropped helmet easy to spot on the ground.\n"
 			"Next-Gen game update (PostNG): applies a TESEffectShader glow.\n"
 			"Older versions (PreNG): falls back to a visibility blink on the helmet mesh.");
 		CheckboxSave("Enable highlight", &s->helmetShaderEnabled,
-			"Apply a TESEffectShader (PostNG) or blink effect (PreNG) to your dropped "
-			"helmet so you can easily locate it on the ground.");
+			"When the game exposes ApplyEffectShader, uses your TESEffectShader (overlay-style glow). "
+			"If that API is unavailable or the form is missing, falls back to a slow visibility pulse on the mesh "
+			"(not as nice as a shader, but easier to spot than nothing).");
 		{
 			static char shaderBuf[128]{};
 			static bool shaderBufInit = false;
@@ -759,16 +817,15 @@ namespace HSK::Menu
 			"%.0f");
 
 		ImGuiMCP::Spacing();
-		SectionHeader("Point light",
+		SectionHeader("Dropped helmet -- point light",
 			"Place an actual light source at the helmet's location so it illuminates "
 			"the surrounding area. Useful in dark environments where shaders alone "
 			"are hard to see. Disabled by default.");
 		CheckboxSave("Place point light at helmet", &s->helmetLightEnabled,
-			"When ON, spawns an unshadowed point light (TESObjectLIGH) at the helmet's "
-			"drop location. The light makes the area glow, visible even in complete "
-			"darkness or from behind cover.\n\n"
+			"When ON, spawns a TESObjectLIGH at the helmet's position using the game's reference "
+			"creator (same path the CK uses). If that fails, a console PlaceAtMe fallback is tried.\n\n"
 			"Requires a valid TESObjectLIGH EditorID in your load order (see below). "
-			"The light is automatically cleaned up when you pick up the helmet.");
+			"The light is cleaned up when you pick up the helmet (when the mod recorded its ref).");
 		{
 			static char lightEdidBuf[128]{};
 			static bool lightEdidBufInit = false;
@@ -791,21 +848,22 @@ namespace HSK::Menu
 		}
 
 		ImGuiMCP::Spacing();
-		SectionHeader("HUD helmet tracker",
+		SectionHeader("Dropped helmet -- HUD tracker",
 			"When your helmet is knocked off, a periodic HUD message shows which "
 			"direction to look and how far away it is. Works even through walls, "
 			"vegetation, and at long range -- never lose your helmet again.");
 		CheckboxSave("Enable HUD tracker", &s->helmetTrackerEnabled,
-			"Show a periodic compass/distance HUD message pointing you toward your "
-			"dropped helmet. The message shows an arrow (^ > >> v << <) indicating "
-			"direction relative to where you're facing, plus distance in meters.\n\n"
+			"Show a compass/distance HUD message pointing you toward your dropped helmet "
+			"(arrow ^ > >> v << < vs. your facing, plus meters).\n"
+			"The first ping fires as soon as the helmet lands; later pings use the interval below. "
+			"A new knockoff always starts a fresh tracker.\n\n"
 			"Stops when you pick up the helmet or the shader duration expires.");
-		SliderFloatSave("Tracker update interval (s)", &s->helmetTrackerIntervalSec, 1.0f, 10.0f,
-			"How often the direction/distance message refreshes on your HUD.\n"
-			"  1s = very frequent (always on screen)\n"
+		SliderFloatSave("Tracker update interval (s)", &s->helmetTrackerIntervalSec, 0.5f, 10.0f,
+			"How often follow-up HUD messages refresh (the first ping is always immediate).\n"
+			"  0.5s = very chatty\n"
 			"  3s = default\n"
 			"  5s+ = subtle reminder",
-			"%.0f");
+			"%.1f");
 
 		DrawSaveStatus();
 	}
@@ -1159,7 +1217,9 @@ namespace HSK::Menu
 			"  - Race blacklist: matched against the actor's TESRace EditorID\n"
 			"  - Immune keywords: matched against the actor's BGSKeywords (works for any race)\n\n"
 			"Both lists are comma-separated and case-insensitive substrings; partial matches "
-			"work, so 'Ghoul' will catch GhoulRace, FeralGhoulRace, GlowingFeralGhoulRace, etc.");
+			"work, so 'Ghoul' will catch GhoulRace, FeralGhoulRace, GlowingFeralGhoulRace, etc.\n\n"
+			"Feral ghoul race patterns (below) are separate: they opt matched Humanoids into "
+			"special instakill rules (see Chances / Caliber Mods), not immunity.");
 
 		SectionHeader("Race blacklist",
 			"Per-race opt-out by TESRace EditorID. Useful for sparing specific NPCs (Codsworth, "
@@ -1173,6 +1233,28 @@ namespace HSK::Menu
 		Tooltip("Comma-separated list. Each entry is matched as a case-insensitive substring "
 			"of the actor's race EditorID. Press Enter or click outside to commit. "
 			"Click 'Save settings' at the top to persist.");
+
+		ImGuiMCP::Separator();
+		SectionHeader("Feral ghoul race patterns",
+			"Comma-separated substrings matched against TESRace EditorID. If the actor's final "
+			"category is Humanoid and any pattern matches, they use the Feral ghoul base chance "
+			"and caliber row; helmet ballistic/energy AR is ignored for the instakill chance "
+			"(PA bucket rules do not apply). Add patterns for modded races in the CK "
+			"'Humanoid - Feral Ghoul' family (e.g. MyModFeralGhoulRace).");
+		ImGuiMCP::Text("Example: FeralGhoul, GlowingOne");
+		if (ImGuiMCP::InputText("Feral ghoul race patterns", State::feralGhoulRacePatternsInput,
+				sizeof(State::feralGhoulRacePatternsInput))) {
+			s->feralGhoulRacePatterns = SplitCommaList(State::feralGhoulRacePatternsInput);
+			if (s->feralGhoulRacePatterns.empty()) {
+				s->feralGhoulRacePatterns.push_back("FeralGhoul");
+				std::strncpy(State::feralGhoulRacePatternsInput, "FeralGhoul",
+					sizeof(State::feralGhoulRacePatternsInput) - 1);
+				State::feralGhoulRacePatternsInput[sizeof(State::feralGhoulRacePatternsInput) - 1] = '\0';
+			}
+			MarkDirty();
+		}
+		Tooltip("Comma-separated substrings of race EditorID. Default single entry FeralGhoul "
+			"covers vanilla feral races. Clearing all entries resets to FeralGhoul.");
 
 		ImGuiMCP::Separator();
 		SectionHeader("Immune keywords",
@@ -1191,62 +1273,6 @@ namespace HSK::Menu
 		DrawSaveStatus();
 	}
 
-	void __stdcall RenderMelee()
-	{
-		auto* s = Settings::GetSingleton();
-
-		PageHeader("Melee helmet knockoff",
-			"Melee hits to the head can knock off helmets. This only triggers helmet "
-			"knockoff -- melee headshots never instakill via this mod. The helmet flies off "
-			"in the opposite direction of the strike.");
-
-		CheckboxSave("Enable melee helmet knockoff", &s->melee.enableMeleeKnockoff,
-			"Master toggle. If ON, melee hits to the head can knock off helmets based "
-			"on the weapon size and the chances below.\n"
-			"If OFF, melee hits are completely ignored by this mod.");
-
-		ImGuiMCP::Spacing();
-		SectionHeader("Melee weapon chances",
-			"Knockoff chance based on the size of the melee weapon. Fists and unarmed "
-			"attacks cannot knock off helmets. Only medium (one-handed) and large "
-			"(two-handed) melee weapons qualify.");
-		SliderFloatSave("Medium weapon chance (%)", &s->melee.meleeKnockoffChanceMedium, 0.0f, 100.0f,
-			"Knockoff chance per head hit from a one-handed melee weapon (machete, "
-			"combat knife, pipe wrench, baseball bat [1H], etc.).\n"
-			"Default 10%: low chance -- these weapons are light and don't deliver "
-			"enough force to reliably pop a helmet.",
-			"%.0f");
-		SliderFloatSave("Large weapon chance (%)", &s->melee.meleeKnockoffChanceLarge, 0.0f, 100.0f,
-			"Knockoff chance per head hit from a two-handed melee weapon (super sledge, "
-			"baseball bat [2H], sledgehammer, Grognak's Axe, etc.).\n"
-			"Default 20%: higher chance -- these are heavy weapons swung with both hands.",
-			"%.0f");
-
-		ImGuiMCP::Spacing();
-		SectionHeader("Gun bash",
-			"Bashing someone in the head with the butt of a firearm can also knock off "
-			"their helmet. Only non-pistol firearms qualify (rifles, shotguns, heavy "
-			"weapons) since they have enough mass to deliver a solid impact.");
-		CheckboxSave("Gun bash can knock off helmets", &s->melee.gunBashKnockoff,
-			"If ON, bashing with a non-pistol firearm counts as a melee headshot for "
-			"knockoff purposes. Pistol-caliber weapons and excluded ammo types are "
-			"filtered out (too light to pop a helmet).");
-		SliderFloatSave("Gun bash knockoff chance (%)", &s->melee.gunBashKnockoffChance, 0.0f, 100.0f,
-			"Knockoff chance per gun-bash head hit with a qualifying firearm.\n"
-			"Default 15%: between medium melee and large melee since you're swinging "
-			"a heavy metal gun but not with full two-handed force.",
-			"%.0f");
-
-		ImGuiMCP::Spacing();
-		ImGuiMCP::TextWrapped(
-			"Notes:\n"
-			"- Power Armor helmets are immune to melee knockoff (bolted to the frame).\n"
-			"- Player knockoff mult and master toggle from the Helmet page also apply.\n"
-			"- Helmets fly off in the direction opposite the impact.");
-
-		DrawSaveStatus();
-	}
-
 	void __stdcall RenderKillImpulse()
 	{
 		auto* s = Settings::GetSingleton();
@@ -1261,8 +1287,9 @@ namespace HSK::Menu
 			"for a 'snap-back' visual. If OFF, no head snap is ever applied.");
 		CheckboxSave("Apply on all headshots", &s->killImpulse.applyOnAllHeadshots,
 			"When ON: head snap fires on EVERY headshot to a non-player humanoid "
-			"(including shots that don't kill, and shots on already-dead actors).\n"
-			"When OFF: head snap only fires on instakill headshots.\n"
+			"(including feral ghouls; not synths), including shots that don't kill "
+			"and shots on already-dead actors.\n"
+			"When OFF: head snap only fires on instakill headshots (same categories).\n"
 			"Useful for tactical feedback when a shot connects but the helmet absorbs it.");
 		SliderFloatSave("Snap angle (degrees)", &s->killImpulse.magnitude, 5.0f, 90.0f,
 			"How far the head rotates backward on snap. 25 gives a dramatic but "
@@ -1539,6 +1566,7 @@ namespace HSK::Menu
 			ImGuiMCP::Text("Race ID:   0x%08X", raceFormID);
 			ImGuiMCP::Spacing();
 			ImGuiMCP::Text("Category:  %s", catName);
+			ImGuiMCP::Text("Feral ghoul (race pattern): %s", info.isFeralGhoul ? "Yes" : "No");
 			ImGuiMCP::Text("Level:     %u", info.level);
 			ImGuiMCP::Text("Legendary: %s", info.isLegendary ? "Yes" : "No");
 			ImGuiMCP::Text("Power Armor: %s", info.isInPowerArmor ? "Yes" : "No");
