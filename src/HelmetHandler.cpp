@@ -473,16 +473,41 @@ namespace HSK
 		}
 	}
 
+	// kObjectHealth stack extra: CommonLibF4 exposes the enum but not this class.
+	// Used read-only from InspectHead (ExtraDataList read lock in GetByType).
+	struct ExtraObjectHealth : RE::BSExtraData
+	{
+		float health;  // 18
+	};
+	static_assert(sizeof(RE::BSExtraData) == 0x18);
+	static_assert(sizeof(ExtraObjectHealth) == 0x20);
+
+	// True when the equipped stack carries kObjectHealth and health is ~0
+	// (vanilla-broken armor piece still in inventory). Missing extra => not broken.
+	[[nodiscard]] static bool IsArmorStackBroken(const RE::BGSInventoryItem::Stack* a_stack)
+	{
+		if (!a_stack) return false;
+		const auto* el = a_stack->extra.get();
+		if (!el || !el->HasType(RE::EXTRA_DATA_TYPE::kObjectHealth)) return false;
+		const auto* oh = static_cast<const ExtraObjectHealth*>(
+			el->GetByType(RE::EXTRA_DATA_TYPE::kObjectHealth));
+		if (!oh) return false;
+		return oh->health <= 1.0e-3f;
+	}
+
 	// =====================================================================
 	// HelmetInfo extraction
 	//
 	// Strategy:
 	//   1. Walk every equipped TESObjectARMO on the actor.
-	//   2. Among pieces occupying any head slot (30/31/32), pick the one
-	//      with the highest armor rating -- that's "the helmet".
-	//   3. Decide PA-helmet vs regular helmet by checking, in order:
+	//   2. Among pieces occupying any head slot (30/31/32), ignore stacks whose
+	//      kObjectHealth indicates the piece is destroyed (still equipped in FO4).
+	//   3. Pick the non-broken piece with the highest template armor rating.
+	//   4. Decide PA-helmet vs regular helmet by checking, in order:
 	//        a) the picked helmet's keywords for "ArmorTypePower"
 	//        b) the actor's kPowerArmor ExtraData
+	//   5. If every head-slot equipped piece is broken, treat as bare head (no
+	//      frame-only "armored bucket" reinstate); PA caliber bucket off.
 	// =====================================================================
 	HelmetInfo HelmetHandler::InspectHead(RE::Actor* a_actor) const
 	{
@@ -494,6 +519,7 @@ namespace HSK
 
 		RE::TESObjectARMO* helmetPick = nullptr;
 		float              bestCombinedAR = -1.0f;
+		bool               hadEquippedHeadSlotArmo = false;
 
 		for (auto& item : invList->data) {
 			auto* obj = item.object;
@@ -501,24 +527,24 @@ namespace HSK
 
 			auto* armo = static_cast<RE::TESObjectARMO*>(obj);
 
-			bool isEquipped = false;
-			for (auto stack = item.stackData.get(); stack; stack = stack->nextStack.get()) {
-				if (stack->IsEquipped()) {
-					isEquipped = true;
-					break;
-				}
-			}
-			if (!isEquipped) continue;
-
 			const std::uint32_t slots = armo->RE::BGSBipedObjectForm::GetFilledSlots();
 			if (!(slots & kHeadCoveringMask)) continue;
 
-			float bal = 0.0f, ene = 0.0f;
-			ReadDamageTypeResistances(armo, bal, ene);
-			const float combinedAR = bal + ene;
-			if (!helmetPick || combinedAR > bestCombinedAR) {
-				helmetPick    = armo;
-				bestCombinedAR = combinedAR;
+			for (auto* stack = item.stackData.get(); stack; stack = stack->nextStack.get()) {
+				if (!stack->IsEquipped()) continue;
+
+				hadEquippedHeadSlotArmo = true;
+				if (IsArmorStackBroken(stack)) {
+					continue;
+				}
+
+				float bal = 0.0f, ene = 0.0f;
+				ReadDamageTypeResistances(armo, bal, ene);
+				const float combinedAR = bal + ene;
+				if (!helmetPick || combinedAR > bestCombinedAR) {
+					helmetPick     = armo;
+					bestCombinedAR = combinedAR;
+				}
 			}
 		}
 
@@ -542,6 +568,17 @@ namespace HSK
 			info.ballisticAR  = bal;
 			info.energyAR     = ene;
 			info.headArmor    = helmetPick;
+			return info;
+		}
+
+		// Equipped head-slot armor rows existed but no non-broken stack counted
+		// as protecting (all kObjectHealth-depleted / etc.): exposed head.
+		if (!helmetPick && hadEquippedHeadSlotArmo) {
+			if (Settings::GetSingleton()->debugLogging) {
+				logger::info("[HSK] InspectHead: equipped head-slot armor but no protecting stack "
+							 "(e.g. broken kObjectHealth) -- bare head (actor=0x{:08X})",
+					a_actor->GetFormID());
+			}
 			return info;
 		}
 

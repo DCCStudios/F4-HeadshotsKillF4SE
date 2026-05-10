@@ -6,10 +6,13 @@
 namespace HSK
 {
 	// Result of inspecting an actor's head/helmet armor.
+	// Equipped pieces with kObjectHealth ~0 (vanilla-broken, still in inventory)
+	// do not count as head armor; PA frame-only bucket applies only when no
+	// head-slot ARMO is equipped at all.
 	struct HelmetInfo
 	{
-		bool   hasHeadArmor{ false };       // any armor covering slot 30/31/32
-		bool   isPowerArmor{ false };       // PA helmet (slot 41 / kPowerArmor extra data)
+		bool   hasHeadArmor{ false };       // any protecting armor covering slot 30/31/32
+		bool   isPowerArmor{ false };       // PA helmet (ArmorTypePower / kPowerArmor extra)
 		float  ballisticAR{ 0.0f };         // ballistic armor rating of head piece (sum if multiple)
 		float  energyAR{ 0.0f };            // energy armor rating
 		RE::TESObjectARMO* headArmor{ nullptr };   // the actual ARMO form for knockoff

@@ -688,7 +688,12 @@ namespace HSK
 
 		// Player / follower toggle
 		if (!settings->applyToPlayerAndFollowers) {
-			if (a_info.isPlayer || a_info.isFollower) return false;
+			if (a_info.isPlayer || a_info.isFollower) {
+				if (settings->debugLogging) {
+					logger::info("[HSK]   victim filter: rejected -- player/follower (applyToPlayerAndFollowers=false)");
+				}
+				return false;
+			}
 		}
 
 		// Level gap
@@ -698,6 +703,10 @@ namespace HSK
 				auto* npc = player->GetNPC();
 				const std::uint16_t playerLvl = npc ? npc->actorData.level : 1;
 				if (a_info.level > playerLvl + static_cast<std::uint16_t>(settings->levelGapThreshold)) {
+					if (settings->debugLogging) {
+						logger::info("[HSK]   victim filter: rejected -- level gap (enemy={} > player {} + threshold {})",
+							a_info.level, playerLvl, settings->levelGapThreshold);
+					}
 					return false;
 				}
 			}
